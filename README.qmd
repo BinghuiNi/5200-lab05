@@ -1,0 +1,490 @@
+---
+title: "README"
+format: 
+  html:
+    theme: lux
+    highlight-style: zenburn
+    toc: true
+editor: visual
+prefer-html: true
+execute:
+  warning: false
+  message: false
+---
+
+::: {.callout-note appearance="minimal" collapse=true}
+## Access the Python environment
+
+```{r}
+library(reticulate)
+reticulate::use_virtualenv("~/.pyenv/versions/3.12.7/envs/dsan5200-3.12.7", required=T)
+```
+
+1.  For some reason, I had to hard-code the path to `conda` for this file to work on my computer. Please remove the `conda = "..."` section for your own runs, or replace it with the path to your `conda` binary.
+:::
+
+# Assignment
+
+::: {.callout-warning appearance="minimal" icon=false}
+
+
+In the `data` folder, there is data that we will explore in this laboratory, relating to demographics and geographies of the DC Metropolitan area (obtained from `opendata.dc.gov`).
+
+1.  Create choropleths using at least two toolkits, one static based on
+    R/Python and the other interactive based on Javascript packages that shows
+an aspect of demographics by wards in DC. The column variables are coded in the
+data, and the actual variables can be found
+[here](https://opendata.dc.gov/datasets/DCGIS::acs-demographic-characteristics-dc-ward/about).
+
+We expect themes and all points mentioned [here](https://gu-dsan.github.io/5200-spring-2025/site-page-content/standards.html) 
+to be incorporated in your visualizations. 
+You will submit this, as usual, in GitHub Classroom. 
+Your submission will include the following components:
+
+-   A Quarto document that contains the two visualizations, named `maps.qmd`
+
+-   If you are using your own virtual environment, please include either
+the `requirements.txt` or `environment.yml` file (depending on whether you use
+`virtualenv` or `conda`.
+
+-   If you are using R, please create an environment using `renv`, and ensure
+that the `renv.lock` file is included in your submission, for the purposes of
+reproducibility.
+
+:::
+
+# Laboratory
+
+In this laboratory we will explore the DC metro system. Information about the metro stations and their locations are provided in `data/metro-stations`, and various geographic features are available in `data/dc-boundary` , `data/wards` and `data/dc-boundary`
+
+# The R ecosystem
+
+Let's first set up our environment.
+
+::: {.callout-important collapse="true" appearance="simple"}
+## Virtual environments
+
+We encourage the use of **renv** to create a virtual environment for {{< fa brands r-project >}}, to ensure reproducibility and also to isolate the requirements of each project. This also allows particular versions of packages to be used and preserved for use within a project. See [here](https://gu-dsan.github.io/5200-spring-2024/reference/environment.html#r-environments) for more details.
+:::
+
+```{r}
+#| message: false
+#| warning: false
+
+library(tidyverse)
+library(sf) # simple features in R, enables geographic viz
+library(geojsonsf) # reading GeoJSON files into the right format
+library(leaflet) # interactive maps
+library(tmap) # package for static and interactive maps following GoG
+library(spData) # data package for spatial data
+library(usmap) # US map data
+
+library(htmlwidgets)
+library(htmltools) # HTML manipulation
+```
+
+We first load the data. We will start with {{< fa brands r-project >}} and use the **sf** package to read the files, which are in *GeoJSON* format.
+
+```{r}
+#| code-fold: true
+#| code-summary: "Ingesting data with geographies"
+zipcodes <- geojson_sf("data/zip-codes/Zip_Codes.geojson")
+dc <- geojson_sf("data/dc-boundary/Washington_DC_Boundary.geojson")
+metro <- geojson_sf("data/metro-stations/Metro_Stations_Regional.geojson")
+wards <- geojson_sf("data/wards/ACS_Demographic_Characteristics_DC_Ward.geojson")
+```
+
+## ggplot2 and simple features (sf)
+
+The **sf** package allows us to create some plots rather quickly.
+
+::: {.callout-tip collapse="true" appearance="simple"}
+## Default behavior
+
+In the following code, you notice there is no `aes()` specification. The default behavior is to plot the simple features as specified in the column named `geometry`. If you have stored this information in a different column, you can specify that withing `geom_sf` with the `aes(geometry=<colname>)` specification.
+:::
+
+```{r}
+ggplot() +
+  geom_sf(data = dc) +
+  geom_sf(data = metro)
+```
+
+There are some nice things going on here. For example, the longitude and latitudes are nicely formatted. However, generally, there is no context for this map, if you didn't know what DC looks like. So we're going to give it some context.
+
+```{r}
+counties <- us_map("counties") # <1>
+bbox <- st_bbox(metro) # <2>
+plt <- ggplot() +
+  geom_sf(data = dc, color = "grey70") +
+  geom_sf(data = counties, color = "grey70") +
+  geom_sf(data = metro)
+
+plt + coord_sf(xlim = c(bbox$xmin, bbox$xmax), ylim = c(bbox$ymin, bbox$ymax))
+```
+
+1.  Ingest data for US county geographies
+2.  Extract the *bounding box* for the Metro data, so we can clip the full map down to just the region where data is being plotted (and thus maintain good ink-to-data ratio)
+
+Let's add a bit more context by labeling the counties.
+
+```{r}
+centres <- st_centroid(counties) # <1>
+plt + geom_sf_text(data = centres, aes(label = county)) + # <2>
+  coord_sf(xlim = c(bbox$xmin, bbox$xmax), ylim = c(bbox$ymin, bbox$ymax)) +
+  labs(x = "Longitude", y = "Latitude") +
+  theme_minimal()
+```
+
+1.  Compute the centroids of each polygon that defines a county.
+2.  Use `geom_sf_text` instead of `geom_text` since the coordinate system is defined by the geometry column, and can change if we change the CRS.
+
+Let's filter these so that we can highlight the particular lines
+
+```{r}
+plt + geom_sf_text(data = centres, aes(label = county), color = "grey50") +
+  geom_sf(
+    data = metro |> filter(str_detect(LINE, "green")),
+    color = "green"
+  ) +
+  coord_sf(xlim = c(bbox$xmin, bbox$xmax), ylim = c(bbox$ymin, bbox$ymax)) +
+  labs(x = "Longitude", y = "Latitude") +
+  theme_minimal()
+```
+
+We can iterate over the different layers to color all the lines. This is a strategy we use repeatedly in this lab; generating each colored layer in a loop and adding it as a new layer to an existing plot.
+
+```{r}
+plt <- ggplot() +
+  geom_sf(data = dc, color = "grey70") +
+  geom_sf(data = counties, color = "grey70") +
+  geom_sf_text(data = centres, aes(label = county), color = "grey50") +
+  geom_sf(data = metro)
+
+for (line in c("red", "orange", "blue", "green", "yellow", "silver")) {
+  plt <- plt +
+    geom_sf(
+      data = metro |>
+        filter(str_detect(LINE, line)),
+      color = ifelse(line == "silver", "grey", line)
+    )
+}
+
+plt +
+  coord_sf(
+    xlim = c(bbox$xmin, bbox$xmax),
+    ylim = c(bbox$ymin, bbox$ymax)
+  ) +
+  labs(x = "Longitude", y = "Latitude", title = "Washington DC Metro System") +
+  theme_minimal()
+```
+
+I was trying to actually make the stations for each Metro line join in a line, so I could see the tracks. I couldn't do it, since I had a bit of an issue sorting the stations in the right order. If I could sort them in the right order, the strategy would be
+
+```{r}
+#| eval: false
+p_red <- metro |> filter(str_detect(LINE, "red"))
+p_red1 <- p_red |> summarise(do_union = F) |> # keep original ordering, create multi_polygon
+  st_cast("LINESTRING") # transform multi-point into string
+```
+
+## Using **tmap for static and interactive maps**
+
+**tmap** is another package that follows the *grammar of graphics* to create geospatial plots. The basic structure is to create a map canvas using `tm_shape`, and then overlay it with shapes or simple features using `tm_*` (`bubbles`,`polygons`, etc).
+
+```{r}
+full_map <-
+  tm_shape(counties, bbox = st_bbox(metro)) + tm_polygons(col = "white")
+full_map
+```
+
+Add a layer with the DC ZIP codes
+
+```{r}
+full_map <- full_map + tm_shape(zipcodes) + tm_polygons(col = "white")
+full_map
+```
+
+Add a layer with the Orange Line stations
+
+```{r}
+p_orange <- metro |> filter(str_detect(LINE, "orange"))
+full_map <- full_map + tm_shape(p_orange) + tm_bubbles(size = 0.5, col = "orange")
+full_map + tm_shape(centres) + tm_text("county", col = "gray20") + 
+  tm_layout(title = "DC Metro: Orange Line",
+            title.position = c('right','bottom'))
+```
+
+**tmap** makes it very easy to create interactive maps. You invoke `tmap_mode("view")`. Here we show a single layer over a basemap.
+
+```{r}
+tmap_mode("view")
+tm_basemap(leaflet::providers$CartoDB.Positron) +
+  tm_shape(p_orange) +
+  tm_bubbles(size = 2, col = "orange", id = "NAME") +
+  tm_layout(title = "DC Metro: Orange Line",
+            title.position = c("right","bottom"))
+```
+
+We can also add a layer with specifying the District in the map.
+
+```{r}
+tm_basemap(leaflet::providers$CartoDB.Positron) +
+  tm_shape(dc) + tm_polygons() + # layer 1
+  tm_shape(metro) + tm_bubbles(id = "NAME") # layer 2
+```
+
+::: callout-tip
+This process can, of course, be expanded to more layers. The idea with leaflet-based interactive maps is that there is a base layer defined by the basemap (which, in this case can be selected interactively), and then we put data-based layers on top, choosing marks as appropriate, within the coordinate system defined by the simple features.
+:::
+
+## Using leaflet for interactive maps
+
+The **tmap** interactive charts above use **leaflet.js**. This library is wrapped in the **leaflet** package in {{< fa brands r-project >}}, and in the **folium** package in {{< fa brands python >}}. This allows us to create more customized maps
+
+::: callout-tip
+## Leaflet as a htmlwidget
+
+The **leaflet** package is part of the [htmlwidgets](https://www.htmlwidgets.org) ecosystem and is compatible with the **crosstalk** package, so we can use **leaflet** as part of a *linked set of interactive graphs* from {{< fa brands r-project >}}
+:::
+
+```{r}
+#| code-fold: true
+#| code-summary: "Source"
+plt <- leaflet(metro) |>
+  setView(lng = -77, lat = 38.9, zoom = 10) |> # <1>
+  addProviderTiles("CartoDB.Positron") |> # <2>
+  addCircleMarkers(color = "gray", radius = 5, opacity = 0.3)
+for (line in c("red", "orange", "blue", "green", "yellow", "silver")) { # <3>
+  plt <- plt |>
+    addCircleMarkers(
+      data = metro |> filter(str_detect(LINE, line)),
+      color = line, radius = 3, opacity = 1,
+      popup = ~NAME # <4>
+    )
+} # <3>
+
+rr <- tags$div( # <5>
+   HTML('<h3 align="center" style="font-size:16px"><b>Washington DC Metro System</b></h3>')
+ )  # <5>
+
+plt |> 
+  addControl(rr, position='bottomright')
+```
+
+1.  Set the default center and zoom level
+2.  Set the basemap. There are several choices; see [here](https://rstudio.github.io/leaflet/articles/basemaps.html) for details and specifications
+3.  This for-loop allows us to add layers/tracks separately for each Metro line
+4. Here we're using a **pop-up**, so to see the tooltip, you have to click on a station marker
+5.  Format the title using HTML
+
+# The Python ecosystem
+
+## Using geopandas and in-built plotting functions
+
+We initialize our environment; these packages should already be available in the `dsan5200` conda environment. The new package here is **geopandas** which works very much like **sf** in {{< fa brands r-project >}}; it creates a pandas `DataFrame` with a special column called `geometry` that contains the simple features specifications we need.
+
+![](https://geopandas.org/en/stable/_images/dataframe.svg)
+
+```{python}
+import pandas as pd
+import geopandas as gpd
+import matplotlib.pyplot as plt
+import altair as alt
+import folium
+```
+
+There are several packages available in {{< fa brands python >}} for doing geospatial visualizations. The two packages we'll see here (indirectly) are **matplotlib** and **folium** (wrapping `leaflet.js`), which are invoked as backends to geopandas objects. This is a nice convenience, since the syntax for both packages are a bit involved. We will also use the **Altair** package to include some control widgets.
+
+Let's now read in the data. This should be quite familiar, using a generic `read_file` invocation that figures out the format of the input file on-the-fly.
+
+```{python}
+#| code-fold: true
+#| code-summary: "Data ingestion and munging"
+counties = gpd.read_file('data/us_counties.geojson')
+county_center = gpd.GeoDataFrame( # <1>
+    data=counties.copy(),
+    geometry=counties.geometry.to_crs(epsg=5070).centroid.to_crs(epsg=4326),
+) # <1>
+dc_metro = gpd.read_file("data/metro-stations/Metro_Stations_Regional.geojson")[
+    ["NAME", "LINE", "geometry"] # <2>
+]
+dc_zips = gpd.read_file("data/zip-codes/Zip_Codes.geojson")[
+    ["ZIPCODE", "NAME", "geometry"] # <2>
+]
+dc_bdry = gpd.read_file("data/dc-boundary/Washington_DC_Boundary.geojson")
+```
+
+1.  We chose an equidistant projection (Albers USA) to compute the centroids, and then use EPSG:4326 for the visualization
+2.  Keeping only some necessary columns
+
+We can see the structure of these data sets below:
+
+```{python}
+dc_metro.head()
+```
+
+## Static visualizations using a matplotlib backend
+
+We will work on layering plots using the matplotlib backend. Before layering, as usual, make sure that the layers are using the same CRS
+
+```{python}
+counties_dmv = counties.sjoin(dc_metro.to_crs(counties.crs), how="inner")  # <1>
+base = counties_dmv.boundary.plot(color="lightblue", linewidth=0.3)
+dc_bdry = dc_bdry.to_crs(counties.crs)
+dc_metro = dc_metro.to_crs(dc_bdry.crs)
+
+dc_bdry.boundary.plot(ax=base, color="gray")
+for line in ["red", "orange", "blue", "green", "yellow", "silver"]:
+    (
+        dc_metro[dc_metro.LINE.str.contains(line)].plot(
+            ax=base, color=line, markersize=10
+        )
+    )
+counties_dmv.apply(
+    lambda x: base.annotate( # <2>
+        text=x["county"],  # <3> 
+        xy=x.geometry.centroid.coords[0],  # <4> 
+        ha="center", size=5
+    ),
+    axis=1,
+);
+plt.xticks([]);
+plt.yticks([]);
+plt.title("Washington DC Metro System")
+```
+
+1.  Find the counties that overlap the Metro data and filter to just those counties. This is a *spatial join* and is implemented using `sjoin` . Note that we make sure both data are using the same projection prior to the join, otherwise we could get misalignment.
+2.  The annotation will be on the axes defined by `base`
+3.  Use county names as labels, and place them...
+4.  at the computed centroid of the counties
+
+## Interactive visualizations using a leaflet backend
+
+Creating a leaflet map is straightforward using `explore:`
+
+```{python}
+#| eval: false
+dc_zips.explore()
+```
+
+We'll create a layered leaflet-based visualization directly from multiple GeoPandas data.
+
+```{python}
+#| eval: false
+m = dc_zips.explore(tiles="Cartodb positron", name = "DC"); # <1>
+for line in ['red','orange','blue','green','yellow','silver']: # <2>
+    m = (dc_metro[dc_metro.LINE.str.contains(line)]
+      .explore(m = m, color = line, 
+        marker_kwds=dict(radius=5),
+        name = line)); # <2>
+
+# Add title
+title_html = '''
+             <h3 align="center" style="font-size:16px"><b>Washington DC Metro System</b></h3>
+             '''  
+
+m.get_root().html.add_child(folium.Element(title_html));
+folium.LayerControl().add_to(m); # <3>
+m
+```
+
+1.  Creates an leaflet-based representation of the data, with a particular basemap
+2.  Creates additional layer(s) based on other data that is merged onto the same axes as before (`m=m`)
+3.  Adds a menu that allows us to filter particular layers in and out via radio buttons
+
+::: callout-tip
+If you don't want all the intermediate steps to be printed, save the updated layers back to the same object and put semi-colons (`;`) at the end of the appropriate lines of code.
+
+You can add/remove layers using the layers menu on the top right of the figure
+:::
+
+## Interactive visualization using Altair
+
+::: callout-tip
+## Altair and Vega-Lite
+
+Altair is a {{< fa brands python >}} port of Vega-Lite, and so the syntax for Altair is somewhat a transliteration of Vega-Lite's syntax. Later in this laboratory, we show the same plot in Vega-Lite, hosted on ObservableHQ.
+
+The Vega-Lite documentation is a bit clearer, so I developed in Vega-Lite first, and then worked on how to get the same components into Altair. There were some difficult bits, especially with how the menu and slider influenced the visualization in terms of actual variable specifications, but patience and experimentation won out.
+:::
+
+```{python}
+#| code-fold: true
+
+# Prepare interactive widgets
+
+lines = ["red", "orange", "blue", "green", "yellow", "silver"]
+info_dropdown = alt.binding_select(options=lines)
+info_sel = alt.param(bind=info_dropdown, value="red", name="MetroLine")
+scale_slider = alt.binding_range(min=10000, max=35000, step=1000)
+scales = alt.param(bind=scale_slider, value=25000, name="Scale")
+
+# Create the various layers
+
+basemap = (
+    alt.Chart(counties.to_crs(epsg=4326),
+      title = "Washington DC Metro System")
+    .mark_geoshape(fill="white", stroke="blue", clip=True)
+    .encode(
+        longitude="geometry.coordinates[0]:Q",
+        latitude="geometry.coordinates[1]:Q",
+    )
+)
+
+centers = ( # Naming counties
+    alt.Chart(county_center)
+    .mark_text()
+    .transform_calculate(
+        centroidX="geoCentroid(null, datum.geometry)[0]",
+        centroidY="geoCentroid(null, datum.geometry)[1]",
+    )
+    .encode(longitude="centroidX:Q", latitude="centroidY:Q", text="county:N")
+)
+
+metromap = ( # Show all the stops
+    alt.Chart(dc_metro.to_crs(epsg=4326)).mark_geoshape(color="black", opacity=0.1)
+    # .encode(tooltip="NAME")
+)
+
+metroline = ( # Highlight a particular line
+    alt.Chart(dc_metro.to_crs(epsg=4326))
+    .mark_geoshape()
+    .add_params(info_sel)
+    .transform_filter("indexof(datum.LINE,MetroLine)>-1")
+    .encode(
+        stroke=alt.value("black"),
+        color=alt.value(alt.expr("MetroLine")),
+        tooltip="NAME:N",
+    )
+)
+
+# Put the layers together with common projection and scale
+(
+    (basemap + centers + metromap + metroline)
+    .add_params(scales)
+    .project("mercator", center=(-77, 38.9), scale=alt.expr("Scale"))
+    .properties(width=600,height=360)
+)
+```
+
+::: callout-note
+You can filter Metro lines using the dropdown menu, change the zoom with the slider, and see the station names on mouse-over
+:::
+
+# The Javascript ecosystem
+
+## Using Plot.js
+
+We create the same plot using Plot.js, adding some interactivity. In particular, we use a slider to determine the amount of zoom we want, and a pull-down menu to specify the Metro line that will be highlighted. The names of each station on the highlighted line can be seen on mouse-over.
+
+<iframe width="100%" height="675" frameborder="0"
+  src="https://observablehq.com/embed/6bf0bc90bec378ad@226?cells=viewof+radius%2Cviewof+select%2Cmetromap"></iframe>
+
+The code to develop this visualization is available at the link above.
+
+## Using Vega-Lite
+
+`<iframe width="100%" height="411" frameborder="0" src="https://observablehq.com/embed/891649824ebf7a58@338?cells=map"`{=html}
+
+</iframe>
