@@ -1,0 +1,77 @@
+---
+title: "Lab-05"
+author: "Binghui Ni"
+format:
+  html:
+    toc: true
+    code-fold: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+## The R ecosystem
+
+Set up R environment.
+
+```{r}
+# Restore the existing environment from renv.lock
+renv::restore()
+```
+
+Download necessary packages and update the renv.lock file.
+```{r eval=FALSE}
+# Install packages
+install.packages("tidyverse")
+install.packages("sf")
+install.packages("geojsonsf")
+install.packages("leaflet")
+install.packages("tmap")
+install.packages("spData")
+install.packages("usmap")
+install.packages("htmlwidgets")
+install.packages("htmltools")
+
+# Update the renv.lock file
+renv::snapshot()
+```
+
+Load Packages. 
+
+```{r}
+library(tidyverse)
+library(sf) # simple features in R, enables geographic viz
+library(geojsonsf) # reading GeoJSON files into the right format
+library(leaflet) # interactive maps
+library(tmap) # package for static and interactive maps following GoG
+library(spData) # data package for spatial data
+library(usmap) # US map data
+
+library(htmlwidgets)
+library(htmltools) # HTML manipulation
+```
+
+Load geospatial data.
+
+```{r}
+zipcodes <- geojson_sf("data/zip-codes/Zip_Codes.geojson")
+dc <- geojson_sf("data/dc-boundary/Washington_DC_Boundary.geojson")
+metro <- geojson_sf("data/metro-stations/Metro_Stations_Regional.geojson")
+wards <- geojson_sf("data/wards/ACS_Demographic_Characteristics_DC_Ward.geojson")
+```
+
+### Population Heatmap by Ward
+
+```{r}
+counties <- us_map("counties")
+full_map <-
+  tm_shape(counties, bbox = st_bbox(metro)) + tm_polygons(col = "white")
+full_map
+
+wards_map <- full_map +
+  tm_shape(wards) + 
+  tm_polygons(col = "DP05_0001E", palette = "Blues", style = "cont", title = "Total Population") + 
+  tm_layout(main.title = "Population Heatmap by Ward", frame = FALSE)
+wards_map
+```
