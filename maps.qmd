@@ -60,7 +60,36 @@ tm_basemap(leaflet::providers$CartoDB.Positron) +
 ### Observable Plot
 
 ```{ojs}
+wards = FileAttachment("data/wards/ACS_Demographic_Characteristics_DC_Ward.geojson").json()
+Plot.plot({
+  width: 975,
+  height: 610,
+  projection: "identity",
+  color: {
+    type: "quantize",  // Quantize data values
+    n: 9,              // Divide into 9 intervals
+    domain: [70000, 100000],  
+    scheme: "blues",   // Blue color palette
+    label: "Population", 
+    legend: true
+  },
+  marks: [
+    Plot.geo(wards, Plot.centroid({
+      fill: d => d.properties.DP05_0001E,  // Use total population field to fill color
+      tip: true,  // Show tooltips
+      channels: {
+        Ward: d => d.properties.NAMELSAD,  // ward name
+        Population: d => d.properties.DP05_0001E,  // total population
+        `Voting Age Population`: d => d.properties.DP05_0092E,  // Voting Age Population (18 and above)
+        `Sex ratio`: d => d.properties.DP05_0004E,  // Sex ratio (per 100 male)
+        `Median Age`: d => d.properties.DP05_0018E,  // Median Age (years)
+        `Chinese Population`: d => d.properties.DP05_0049E,  // Chinese population
 
+      }
+    })),
+    Plot.geo(wards, {stroke: "white"})  // Draw ward boundaries
+  ]
+})
 ```
 
 ### Vega-Lite
