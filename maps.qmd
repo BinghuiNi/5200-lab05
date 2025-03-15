@@ -57,3 +57,77 @@ tm_basemap(leaflet::providers$CartoDB.Positron) +
 
 ## The Javascript ecosystem
 
+### Observable Plot
+
+```{ojs}
+
+```
+
+### Vega-Lite
+
+```{ojs}
+vlVersion52 = "5.2.0"
+data = require("vega-datasets@1")
+import { aq, op } from '@uwdata/arquero'
+import { us } from "@observablehq/us-geographic-data"
+county = topojson.feature(us, us.objects.counties)
+dc = FileAttachment("data/dc-boundary/Washington_DC_Boundary.geojson").json()
+wards = FileAttachment("data/wards/ACS_Demographic_Characteristics_DC_Ward.geojson").json()
+
+// Basemap for DC
+basemap = vl
+  .markGeoshape({ fill: "white", stroke: "black", strokeWidth: 1 })
+  .data(county.features)  // Use the county features for basemap
+  .config({ view: { stroke: null } })
+  .width(500)
+  .height(300)
+
+// Center of County (for labeling)
+county_center = vl
+  .markText()
+  .data(county.features)
+  .transform([
+    vl.calculate("geoCentroid(null, datum.geometry)").as("centroid"),
+    vl.calculate("datum.centroid[0]").as("centroidX"),
+    vl.calculate("datum.centroid[1]").as("centroidY")
+  ])
+  .encode(
+    vl.longitude().fieldQ("centroidX"),
+    vl.latitude().fieldQ("centroidY"),
+    vl.text().fieldN("properties.name")
+  )
+
+// Create a slider for scale
+slides = vl.param("Scale").value(65000).bind(vl.slider(15000, 150000, 10000))
+
+// Create a menu for selecting the attribute
+labels = ['DP05_0001E', 'DP05_0092E', 'DP05_0004E', 'DP05_0018E', 'DP05_0049E']
+attris = ['Total population', 'Voting Age Population', 'Sex ratio', 'Median Age', 'Chinese Population']
+selectAttri = vl.param("Attribute").bind(vl.menu(attris))
+
+// Map the selected attribute to its corresponding label
+getSelectedField = (selected) => {
+  index = attris.indexOf(selected)
+  return labels[index]  // Return the corresponding label
+}
+
+// Wards layer
+heatmap = vl
+  .markGeoshape({ stroke: "black", strokeWidth: 0.5, tooltip: true })  // Black boundary
+  .data(wards.features)  // Use wards.features for the wards data
+  .encode(
+    vl.color()
+      .fieldQ(`properties.${vl.expr(getSelectedField(selectAttri))}`)  // Dynamically use the selected attribute
+      .scale({ scheme: "blues" })  // Use a blue color scale
+      .title(selectAttri)
+  )
+
+// Final map layer combining basemap, county_center, and heatmap
+map = vl
+  .layer(basemap, county_center, heatmap)
+  .params(slides, selectAttri)
+  .width(500)
+  .height(300)
+  .project(vl.projection("mercator").scale(vl.expr("Scale")).center([-77, 38.9]))  // 修正这里
+  .render()
+```
